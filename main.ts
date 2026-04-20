@@ -48,8 +48,10 @@ function currentSettings(): DiceRollerSettings {
 // GURPS skill rolls (capitalized "Name N" with contextual anchoring) are gated too.
 
 function buildPrimaryRegex(): RegExp {
+	// Sides digits are optional to support GURPS shorthand like `1d`, `1d-1`,
+	// `2d+3` (implicit d6).
 	const alts: string[] = [
-		"(?:\\d{1,4})[dD](?:\\d{1,4})(?:\\s*[+-]\\s*\\d{1,4})?",
+		"(?:\\d{1,4})[dD](?:\\d{1,4})?(?:\\s*[+-]\\s*\\d{1,4})?",
 	];
 	const s = currentSettings();
 	const types: string[] = [];
@@ -97,12 +99,11 @@ function buildSkillRegex(context: "read" | "live"): RegExp | null {
 
 function buildStatRegex(context: "read" | "live"): RegExp | null {
 	if (!currentSettings().enableSkills) return null;
-	const prefixChars = context === "live" ? "[:,|]" : "[:,]";
-	const gap = context === "live" ? "[\\s*_]*" : "\\s*";
-	// Suffix is just a word boundary after the number, so stats like
-	// `HP 10 remaining` still highlight.
+	// Stats in the always-allow list match anywhere — no prefix or suffix
+	// context required, just word boundaries on both sides.
+	const gap = context === "live" ? "[\\s*_]+" : "\\s+";
 	return new RegExp(
-		`(?<=(?:^|${prefixChars})${gap})(?:${STAT_ALTERNATION})\\s\\d{1,2}\\b`,
+		`\\b(?:${STAT_ALTERNATION})${gap}\\d{1,2}\\b`,
 		"gmi"
 	);
 }
@@ -192,10 +193,11 @@ type ParsedToken =
 
 function parseToken(raw: string): ParsedToken | null {
 	const s = raw.trim();
-	const diceMatch = /^(\d{1,4})[dD](\d{1,4})(?:\s*([+-])\s*(\d{1,4}))?$/.exec(s);
+	const diceMatch = /^(\d{1,4})[dD](\d{1,4})?(?:\s*([+-])\s*(\d{1,4}))?$/.exec(s);
 	if (diceMatch) {
 		const count = parseInt(diceMatch[1], 10);
-		const sides = parseInt(diceMatch[2], 10);
+		// GURPS shorthand: `1d`, `2d+3` etc. imply d6 when sides are omitted.
+		const sides = diceMatch[2] ? parseInt(diceMatch[2], 10) : 6;
 		const sign = (diceMatch[3] as "+" | "-" | undefined) ?? "";
 		const modifier = diceMatch[4] ? parseInt(diceMatch[4], 10) : 0;
 		if (count <= 0 || sides <= 0 || count > 1000 || sides > 10000) return null;
