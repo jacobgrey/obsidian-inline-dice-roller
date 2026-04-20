@@ -65,9 +65,8 @@ function buildPrimaryRegex(): RegExp {
 const SKILL_WORD = "(?:[A-Z][A-Za-z-]*|\\([^)]+\\))";
 const SKILL_BODY = `${SKILL_WORD}(?:\\s${SKILL_WORD}){0,3}\\s\\d{1,2}`;
 
-// Words that match the skill shape but are weapon stats or attributes, not
-// rollable skills.
-const SKILL_NAME_EXCLUDED = new Set(["acc", "rof", "shots", "tl"]);
+// Words that match the skill shape but are weapon stats, not rollable skills.
+const SKILL_NAME_EXCLUDED = new Set(["acc", "rof", "shots"]);
 
 // GURPS attributes/stats that should highlight even without a trailing
 // `,` / `.` / `|` / EOL suffix. Matched case-insensitively.
@@ -696,7 +695,6 @@ class DiceRollerSettingTab extends PluginSettingTab {
 
 export default class InlineDiceRollerPlugin extends Plugin {
 	settings: DiceRollerSettings = { ...DEFAULT_SETTINGS };
-	private tableObserver?: MutationObserver;
 
 	async onload(): Promise<void> {
 		pluginRef = this;
@@ -705,47 +703,6 @@ export default class InlineDiceRollerPlugin extends Plugin {
 		this.registerMarkdownPostProcessor(processReadingView);
 		this.registerEditorExtension(diceViewPlugin);
 		this.addSettingTab(new DiceRollerSettingTab(this.app, this));
-
-		// Obsidian renders live-preview tables as widgets that hide the
-		// underlying source characters, so CodeMirror mark decorations never
-		// appear inside cells. The markdown post-processor also does not
-		// reliably fire for those widgets. Walk rendered table DOM directly.
-		const processTable = (el: HTMLElement) => {
-			processReadingView(
-				el,
-				null as unknown as MarkdownPostProcessorContext
-			);
-		};
-		const rescanExistingTables = () => {
-			document
-				.querySelectorAll(".cm-editor table")
-				.forEach((t) => processTable(t as HTMLElement));
-		};
-		this.app.workspace.onLayoutReady(rescanExistingTables);
-		this.registerEvent(
-			this.app.workspace.on("active-leaf-change", rescanExistingTables)
-		);
-		this.tableObserver = new MutationObserver((mutations) => {
-			for (const mutation of mutations) {
-				mutation.addedNodes.forEach((node) => {
-					if (node.nodeType !== Node.ELEMENT_NODE) return;
-					const el = node as HTMLElement;
-					if (el.classList.contains("dice-roller-inline")) return;
-					if (!el.closest(".cm-editor")) return;
-					if (el.tagName === "TABLE") {
-						processTable(el);
-					} else {
-						el.querySelectorAll("table").forEach((t) =>
-							processTable(t as HTMLElement)
-						);
-					}
-				});
-			}
-		});
-		this.tableObserver.observe(document.body, {
-			childList: true,
-			subtree: true,
-		});
 
 		this.addCommand({
 			id: "roll-selected-dice",
@@ -764,8 +721,6 @@ export default class InlineDiceRollerPlugin extends Plugin {
 	}
 
 	onunload(): void {
-		this.tableObserver?.disconnect();
-		this.tableObserver = undefined;
 		pluginRef = null;
 	}
 
