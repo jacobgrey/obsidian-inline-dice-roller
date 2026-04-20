@@ -1,0 +1,62 @@
+.dice-roller-inline {
+	color: var(--text-accent);
+	background-color: var(--background-modifier-hover);
+	padding: 0 4px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-weight: 600;
+	border: 1px solid var(--background-modifier-border);
+	transition: background-color 120ms ease, transform 120ms ease;
+	user-select: none;
+}
+
+.dice-roller-inline:hover {
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.dice-roller-inline:active {
+	transform: scale(0.95);
+}
+
+.dice-roller-notice {
+	font-family: var(--font-monospace);
+	white-space: pre-wrap;
+	line-height: 1.4;
+}
+
+.dice-roller-notice .dice-roller-total {
+	font-size: 1.2em;
+	font-weight: 700;
+	color: var(--text-accent);
+	margin-top: 2px;
+}
+
+.dice-roller-notice .dice-roller-success {
+	color: var(--color-green, #3ca05a);
+}
+
+.dice-roller-notice .dice-roller-failure {
+	color: var(--color-red, #c05050);
+}
+
+.dice-roller-popup {
+	position: fixed;
+	z-index: var(--layer-popover, 1000);
+	background-color: var(--background-primary);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+	padding: 8px 12px;
+	max-width: 320px;
+	pointer-events: auto;
+	opacity: 0;
+	transform: translateY(-4px);
+	transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.dice-roller-popup.dice-roller-popup-visible {
+	opacity: 1;
+	transform: translateY(0);
+}

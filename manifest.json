@@ -1,0 +1,10 @@
+{
+	"id": "inline-dice-roller",
+	"name": "Inline Dice Roller",
+	"version": "1.0.0",
+	"minAppVersion": "1.4.0",
+	"description": "Detects dice notation (e.g. 3d4-2, 1d6+3, 10d6) in your notes and rolls them when clicked.",
+	"author": "David",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}

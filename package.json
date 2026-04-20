@@ -1,0 +1,29 @@
+{
+	"name": "inline-dice-roller",
+	"version": "1.0.0",
+	"description": "Obsidian plugin that auto-detects dice notation and rolls on click.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+	},
+	"keywords": [
+		"obsidian",
+		"plugin",
+		"dice",
+		"ttrpg"
+	],
+	"author": "David",
+	"license": "MIT",
+	"devDependencies": {
+		"@codemirror/language": "^6.0.0",
+		"@codemirror/state": "^6.0.0",
+		"@codemirror/view": "^6.0.0",
+		"@types/node": "^16.11.6",
+		"builtin-modules": "3.3.0",
+		"esbuild": "0.17.3",
+		"obsidian": "latest",
+		"tslib": "2.4.0",
+		"typescript": "4.7.4"
+	}
+}
