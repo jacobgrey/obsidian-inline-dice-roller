@@ -72,6 +72,7 @@ const SKILL_NAME_EXCLUDED = new Set(["acc", "rof", "shots", "tl"]);
 // GURPS attributes/stats that should highlight even without a trailing
 // `,` / `.` / `|` / EOL suffix. Matched case-insensitively.
 const STAT_NAMES = [
+	"Block",
 	"Dodge",
 	"Parry",
 	"ST",
