@@ -65,8 +65,9 @@ function buildPrimaryRegex(): RegExp {
 const SKILL_WORD = "(?:[A-Z][A-Za-z-]*|\\([^)]+\\))";
 const SKILL_BODY = `${SKILL_WORD}(?:\\s${SKILL_WORD}){0,3}\\s\\d{1,2}`;
 
-// Words that match the skill shape but are weapon stats, not rollable skills.
-const SKILL_NAME_EXCLUDED = new Set(["acc", "rof", "shots"]);
+// Words that match the skill shape but are weapon stats or attributes, not
+// rollable skills.
+const SKILL_NAME_EXCLUDED = new Set(["acc", "rof", "shots", "tl"]);
 
 // GURPS attributes/stats that should highlight even without a trailing
 // `,` / `.` / `|` / EOL suffix. Matched case-insensitively.
