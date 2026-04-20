@@ -16,30 +16,6 @@ import {
 import { RangeSetBuilder } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 
-// Matches either standard dice notation (1d6, 3D4-2, 10d6+3, 2d20 + 5)
-// or GURPS control/frequency rolls (CR12, FR9, cr 14, etc.).
-//
-// Group layout:
-//   1: dice count        e.g. "3" in "3d6"
-//   2: dice sides        e.g. "6"
-//   3: sign (+|-)        optional
-//   4: modifier (digits) optional
-//   5: gurps type        "CR" | "FR"
-//   6: gurps target      digits
-const TOKEN_SOURCE =
-	"\\b(?:(\\d{1,4})[dD](\\d{1,4})(?:\\s*([+-])\\s*(\\d{1,4}))?|(CR|FR)\\s?(\\d{1,2}))\\b";
-const TOKEN_FLAGS = "gi";
-
-function freshTokenRegex(): RegExp {
-	return new RegExp(TOKEN_SOURCE, TOKEN_FLAGS);
-}
-
-function isTokenString(s: string): boolean {
-	return new RegExp("^(?:" + TOKEN_SOURCE.replace(/\\b/g, "") + ")$", "i").test(
-		s.trim()
-	);
-}
-
 // ---------- Settings ----------
 
 type DisplayMode = "notice" | "popup";
@@ -47,16 +23,147 @@ type DisplayMode = "notice" | "popup";
 interface DiceRollerSettings {
 	displayMode: DisplayMode;
 	durationMs: number;
+	enableControlRolls: boolean;
+	enableFrequencyRolls: boolean;
+	enableSkills: boolean;
 }
 
 const DEFAULT_SETTINGS: DiceRollerSettings = {
 	displayMode: "notice",
 	durationMs: 6000,
+	enableControlRolls: true,
+	enableFrequencyRolls: true,
+	enableSkills: true,
 };
 
 let pluginRef: InlineDiceRollerPlugin | null = null;
 function currentSettings(): DiceRollerSettings {
 	return pluginRef?.settings ?? DEFAULT_SETTINGS;
+}
+
+// ---------- Token regex builders ----------
+//
+// Standard dice notation (1d6, 3D4-2, 10d6+3, 2d20 + 5) is always recognized.
+// GURPS Control/Frequency rolls (CR12, FR9) are gated by settings.
+// GURPS skill rolls (capitalized "Name N" with contextual anchoring) are gated too.
+
+function buildPrimaryRegex(): RegExp {
+	const alts: string[] = [
+		"(?:\\d{1,4})[dD](?:\\d{1,4})(?:\\s*[+-]\\s*\\d{1,4})?",
+	];
+	const s = currentSettings();
+	const types: string[] = [];
+	if (s.enableControlRolls) types.push("CR");
+	if (s.enableFrequencyRolls) types.push("FR");
+	if (types.length) alts.push(`(?:${types.join("|")})\\s?\\d{1,2}`);
+	return new RegExp(`\\b(?:${alts.join("|")})\\b`, "gi");
+}
+
+// Skill name: capitalized word (optionally hyphenated) or a parenthesized specialty.
+const SKILL_WORD = "(?:[A-Z][A-Za-z-]*|\\([^)]+\\))";
+const SKILL_BODY = `${SKILL_WORD}(?:\\s${SKILL_WORD}){0,3}\\s\\d{1,2}`;
+
+// Words that match the skill shape but are weapon stats, not rollable skills.
+const SKILL_NAME_EXCLUDED = new Set(["acc", "rof", "shots"]);
+
+// GURPS attributes/stats that should highlight even without a trailing
+// `,` / `.` / `|` / EOL suffix. Matched case-insensitively.
+const STAT_NAMES = [
+	"Dodge",
+	"Parry",
+	"ST",
+	"DX",
+	"IQ",
+	"HT",
+	"Will",
+	"Per",
+	"HP",
+	"FP",
+];
+const STAT_ALTERNATION = STAT_NAMES.join("|");
+
+function buildSkillRegex(context: "read" | "live"): RegExp | null {
+	if (!currentSettings().enableSkills) return null;
+	const prefixChars = context === "live" ? "[:,|]" : "[:,]";
+	const suffixChars = context === "live" ? "[,.|]" : "[,.]";
+	// Allow markdown emphasis markers (*, _) as transparent padding in live
+	// preview so `**Label:** Skill 12` and `*Skill 12*` still match.
+	const gap = context === "live" ? "[\\s*_]*" : "\\s*";
+	return new RegExp(
+		`(?<=(?:^|${prefixChars})${gap})${SKILL_BODY}(?=${gap}(?:${suffixChars}|$))`,
+		"gm"
+	);
+}
+
+function buildStatRegex(context: "read" | "live"): RegExp | null {
+	if (!currentSettings().enableSkills) return null;
+	const prefixChars = context === "live" ? "[:,|]" : "[:,]";
+	const gap = context === "live" ? "[\\s*_]*" : "\\s*";
+	// Suffix is just a word boundary after the number, so stats like
+	// `HP 10 remaining` still highlight.
+	return new RegExp(
+		`(?<=(?:^|${prefixChars})${gap})(?:${STAT_ALTERNATION})\\s\\d{1,2}\\b`,
+		"gmi"
+	);
+}
+
+function skillNameFromMatch(matchText: string): string {
+	const m = /^(.+?)\s\d{1,2}$/.exec(matchText);
+	return m ? m[1].trim().toLowerCase() : matchText.toLowerCase();
+}
+
+interface TokenMatch {
+	start: number;
+	end: number;
+	text: string;
+}
+
+function findAllMatches(
+	text: string,
+	context: "read" | "live"
+): TokenMatch[] {
+	const matches: TokenMatch[] = [];
+
+	const primary = buildPrimaryRegex();
+	let m: RegExpExecArray | null;
+	while ((m = primary.exec(text)) !== null) {
+		matches.push({
+			start: m.index,
+			end: m.index + m[0].length,
+			text: m[0],
+		});
+	}
+
+	const addIfNew = (start: number, end: number, mt: string) => {
+		if (SKILL_NAME_EXCLUDED.has(skillNameFromMatch(mt))) return;
+		const overlaps = matches.some(
+			(x) => !(end <= x.start || start >= x.end)
+		);
+		if (!overlaps) {
+			matches.push({ start, end, text: mt });
+		}
+	};
+
+	const skill = buildSkillRegex(context);
+	if (skill) {
+		while ((m = skill.exec(text)) !== null) {
+			addIfNew(m.index, m.index + m[0].length, m[0]);
+		}
+	}
+
+	const stat = buildStatRegex(context);
+	if (stat) {
+		while ((m = stat.exec(text)) !== null) {
+			addIfNew(m.index, m.index + m[0].length, m[0]);
+		}
+	}
+
+	matches.sort((a, b) => a.start - b.start);
+	return matches;
+}
+
+function isTokenString(s: string): boolean {
+	return parseToken(s.trim()) !== null;
 }
 
 // ---------- Parsing / rolling ----------
@@ -74,6 +181,12 @@ type ParsedToken =
 			kind: "gurps";
 			notation: string;
 			type: "CR" | "FR";
+			target: number;
+	  }
+	| {
+			kind: "skill";
+			notation: string;
+			name: string;
 			target: number;
 	  };
 
@@ -102,6 +215,27 @@ function parseToken(raw: string): ParsedToken | null {
 		if (target <= 0 || target > 99) return null;
 		return { kind: "gurps", notation: s, type, target };
 	}
+	const skillMatch =
+		/^((?:[A-Z][A-Za-z-]*|\([^)]+\))(?:\s(?:[A-Z][A-Za-z-]*|\([^)]+\))){0,3})\s(\d{1,2})$/.exec(
+			s
+		);
+	if (skillMatch) {
+		const name = skillMatch[1];
+		if (SKILL_NAME_EXCLUDED.has(name.toLowerCase())) return null;
+		const target = parseInt(skillMatch[2], 10);
+		if (target <= 0 || target > 99) return null;
+		return { kind: "skill", notation: s, name, target };
+	}
+	const statMatch = new RegExp(
+		`^(${STAT_ALTERNATION})\\s(\\d{1,2})$`,
+		"i"
+	).exec(s);
+	if (statMatch) {
+		const name = statMatch[1];
+		const target = parseInt(statMatch[2], 10);
+		if (target <= 0 || target > 99) return null;
+		return { kind: "skill", notation: s, name, target };
+	}
 	return null;
 }
 
@@ -120,7 +254,22 @@ interface GurpsRoll {
 	margin: number; // target - total; positive = margin of success
 	success: boolean;
 }
-type RollOutcome = DiceRoll | GurpsRoll;
+interface SkillRoll {
+	kind: "skill";
+	token: Extract<ParsedToken, { kind: "skill" }>;
+	rolls: number[];
+	total: number;
+	margin: number;
+	success: boolean;
+}
+type RollOutcome = DiceRoll | GurpsRoll | SkillRoll;
+
+function roll3d6(): { rolls: number[]; total: number } {
+	const rolls: number[] = [];
+	for (let i = 0; i < 3; i++) rolls.push(1 + Math.floor(Math.random() * 6));
+	const total = rolls.reduce((a, b) => a + b, 0);
+	return { rolls, total };
+}
 
 function rollToken(token: ParsedToken): RollOutcome {
 	if (token.kind === "dice") {
@@ -134,19 +283,13 @@ function rollToken(token: ParsedToken): RollOutcome {
 		else if (token.sign === "-") total -= token.modifier;
 		return { kind: "dice", token, rolls, subtotal, total };
 	}
-	// GURPS: always 3d6 vs target
-	const rolls: number[] = [];
-	for (let i = 0; i < 3; i++) rolls.push(1 + Math.floor(Math.random() * 6));
-	const total = rolls.reduce((a, b) => a + b, 0);
+	const { rolls, total } = roll3d6();
 	const margin = token.target - total;
-	return {
-		kind: "gurps",
-		token,
-		rolls,
-		total,
-		margin,
-		success: total <= token.target,
-	};
+	const success = total <= token.target;
+	if (token.kind === "gurps") {
+		return { kind: "gurps", token, rolls, total, margin, success };
+	}
+	return { kind: "skill", token, rolls, total, margin, success };
 }
 
 function buildRollContent(outcome: RollOutcome): DocumentFragment {
@@ -172,7 +315,14 @@ function buildRollContent(outcome: RollOutcome): DocumentFragment {
 		});
 	} else {
 		const r = outcome;
-		const label = r.token.type === "CR" ? "Control Roll" : "Frequency Roll";
+		let label: string;
+		if (r.kind === "skill") {
+			label = "Skill Roll";
+		} else if (r.token.type === "CR") {
+			label = "Control Roll";
+		} else {
+			label = "Frequency Roll";
+		}
 		wrap.createDiv({
 			text: `🎲 ${r.token.notation} (${label}, target ${r.token.target})`,
 		});
@@ -280,8 +430,7 @@ function processReadingView(
 			continue;
 		const text = t.textContent ?? "";
 		if (!text) continue;
-		// Stateless test to avoid any lastIndex carry-over between nodes.
-		if (freshTokenRegex().test(text)) {
+		if (findAllMatches(text, "read").length > 0) {
 			candidates.push(t);
 		}
 	}
@@ -296,32 +445,31 @@ function replaceTextNodeWithTokens(textNode: Text): void {
 	const parent = textNode.parentNode;
 	if (!parent) return;
 
+	const matches = findAllMatches(text, "read");
+	if (matches.length === 0) return;
+
 	const frag = document.createDocumentFragment();
 	let lastIndex = 0;
-	const regex = freshTokenRegex();
-	let m: RegExpExecArray | null;
-	while ((m = regex.exec(text)) !== null) {
-		const start = m.index;
-		const end = start + m[0].length;
-		if (start > lastIndex) {
+	for (const mm of matches) {
+		if (mm.start > lastIndex) {
 			frag.appendChild(
-				document.createTextNode(text.slice(lastIndex, start))
+				document.createTextNode(text.slice(lastIndex, mm.start))
 			);
 		}
 		const span = document.createElement("span");
 		span.className = "dice-roller-inline";
-		span.textContent = m[0];
-		span.setAttribute("data-dice", m[0]);
-		span.setAttribute("aria-label", `Roll ${m[0]}`);
+		span.textContent = mm.text;
+		span.setAttribute("data-dice", mm.text);
+		span.setAttribute("aria-label", `Roll ${mm.text}`);
 		span.setAttribute("role", "button");
-		const notation = m[0];
+		const notation = mm.text;
 		span.addEventListener("click", (evt) => {
 			evt.preventDefault();
 			evt.stopPropagation();
 			showRollResult(notation, evt);
 		});
 		frag.appendChild(span);
-		lastIndex = end;
+		lastIndex = mm.end;
 	}
 	if (lastIndex < text.length) {
 		frag.appendChild(document.createTextNode(text.slice(lastIndex)));
@@ -376,11 +524,10 @@ function buildDiceDecorations(view: EditorView): DecorationSet {
 
 	for (const { from, to } of view.visibleRanges) {
 		const text = view.state.doc.sliceString(from, to);
-		const regex = freshTokenRegex();
-		let match: RegExpExecArray | null;
-		while ((match = regex.exec(text)) !== null) {
-			const start = from + match.index;
-			const end = start + match[0].length;
+		const matches = findAllMatches(text, "live");
+		for (const mm of matches) {
+			const start = from + mm.start;
+			const end = from + mm.end;
 
 			let cursorOverlap = false;
 			for (const r of selection.ranges) {
@@ -488,6 +635,55 @@ class DiceRollerSettingTab extends PluginSettingTab {
 							this.plugin.settings.durationMs = n;
 							await this.plugin.saveSettings();
 						}
+					})
+			);
+
+		const refreshViews = () => {
+			this.app.workspace.updateOptions();
+		};
+
+		new Setting(containerEl)
+			.setName("Recognize GURPS Control Rolls")
+			.setDesc(
+				"Highlight tokens like CR12 or CR 14. Reading view may need the note reopened to refresh."
+			)
+			.addToggle((tgl) =>
+				tgl
+					.setValue(this.plugin.settings.enableControlRolls)
+					.onChange(async (value) => {
+						this.plugin.settings.enableControlRolls = value;
+						await this.plugin.saveSettings();
+						refreshViews();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Recognize GURPS Frequency Rolls")
+			.setDesc(
+				"Highlight tokens like FR9 or FR 12. Reading view may need the note reopened to refresh."
+			)
+			.addToggle((tgl) =>
+				tgl
+					.setValue(this.plugin.settings.enableFrequencyRolls)
+					.onChange(async (value) => {
+						this.plugin.settings.enableFrequencyRolls = value;
+						await this.plugin.saveSettings();
+						refreshViews();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Recognize GURPS skill rolls")
+			.setDesc(
+				"Highlight capitalized skill names followed by a plain integer (e.g. Broadsword 14, Fast-Draw (Knife) 13). Reading view may need the note reopened to refresh."
+			)
+			.addToggle((tgl) =>
+				tgl
+					.setValue(this.plugin.settings.enableSkills)
+					.onChange(async (value) => {
+						this.plugin.settings.enableSkills = value;
+						await this.plugin.saveSettings();
+						refreshViews();
 					})
 			);
 	}
